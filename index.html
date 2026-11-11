@@ -1,0 +1,338 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Air Drawing Studio</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #10131b;
+  color: white;
+  text-align: center;
+}
+
+header {
+  padding: 18px;
+}
+
+h1 {
+  margin: 5px;
+  font-size: 27px;
+}
+
+#status {
+  color: #00e5a0;
+  margin: 10px;
+  font-size: 15px;
+}
+
+#drawingArea {
+  width: 92%;
+  max-width: 950px;
+  height: 55vh;
+  min-height: 300px;
+  margin: 15px auto;
+  background: white;
+  border-radius: 15px;
+  overflow: hidden;
+  position: relative;
+  border: 3px solid #353b4a;
+}
+
+canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+video {
+  display: none;
+}
+
+.controls {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px;
+}
+
+button, input {
+  padding: 11px 17px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+button {
+  background: #00d99b;
+  color: #071a15;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #00ffb3;
+}
+
+#startBtn {
+  background: #477bff;
+  color: white;
+}
+
+.instructions {
+  color: #c5cad5;
+  font-size: 14px;
+  line-height: 1.8;
+  padding: 10px;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>✋ Air Drawing Studio</h1>
+  <p id="status">Camera not started</p>
+</header>
+
+<video id="video" autoplay playsinline></video>
+
+<div id="drawingArea">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div class="controls">
+  <button id="startBtn">Start Camera</button>
+  <button onclick="clearCanvas()">Clear</button>
+  <input type="color" id="color" value="#000000">
+  <input type="range" id="size" min="2" max="20" value="5">
+</div>
+
+<div class="instructions">
+  ✋ Show both open hands = Activate drawing area<br>
+  🤏 Pinch thumb and index finger = Draw in the air<br>
+  ✊ Make a fist = Stop drawing
+</div>
+
+<script>
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const statusText = document.getElementById("status");
+
+let active = false;
+let drawing = false;
+let previousPoint = null;
+let camera = null;
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+
+  const old = document.createElement("canvas");
+  old.width = canvas.width;
+  old.height = canvas.height;
+  old.getContext("2d").drawImage(canvas, 0, 0);
+
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+
+  ctx.drawImage(
+    old, 0, 0,
+    old.width, old.height,
+    0, 0, canvas.width, canvas.height
+  );
+
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+}
+
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
+
+function clearCanvas() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function distance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+// Detect an open palm
+function isOpenPalm(hand) {
+  const fingers = [
+    [8, 6],
+    [12, 10],
+    [16, 14],
+    [20, 18]
+  ];
+
+  let extended = 0;
+
+  for (const [tip, pip] of fingers) {
+    if (hand[tip].y < hand[pip].y) {
+      extended++;
+    }
+  }
+
+  return extended >= 3;
+}
+
+// Detect a fist
+function isFist(hand) {
+  const wrist = hand[0];
+
+  const fingers = [
+    [8, 6],
+    [12, 10],
+    [16, 14],
+    [20, 18]
+  ];
+
+  let curled = 0;
+
+  for (const [tip, pip] of fingers) {
+    if (
+      distance(hand[tip], wrist) <
+      distance(hand[pip], wrist)
+    ) {
+      curled++;
+    }
+  }
+
+  return curled >= 3;
+}
+
+// Detect pinch
+function isPinching(hand) {
+  return distance(hand[4], hand[8]) < 0.055;
+}
+
+// Draw using index finger
+function drawHand(hand) {
+  const point = {
+    x: (1 - hand[8].x) * canvas.width,
+    y: hand[8].y * canvas.height
+  };
+
+  if (previousPoint) {
+    ctx.beginPath();
+    ctx.moveTo(previousPoint.x, previousPoint.y);
+    ctx.lineTo(point.x, point.y);
+
+    ctx.strokeStyle = document.getElementById("color").value;
+    ctx.lineWidth = document.getElementById("size").value;
+    ctx.stroke();
+  }
+
+  previousPoint = point;
+}
+
+function onResults(results) {
+
+  const hands = results.multiHandLandmarks || [];
+
+  // Wait for two open hands to activate
+  if (!active) {
+
+    if (
+      hands.length >= 2 &&
+      isOpenPalm(hands[0]) &&
+      isOpenPalm(hands[1])
+    ) {
+      active = true;
+      statusText.textContent = "Drawing Area Activated!";
+      statusText.style.color = "#00ff99";
+    }
+
+    return;
+  }
+
+  // Check for fist to stop drawing
+  for (const hand of hands) {
+    if (isFist(hand)) {
+      drawing = false;
+      previousPoint = null;
+      statusText.textContent = "Drawing stopped - Make a pinch to draw";
+      return;
+    }
+  }
+
+  // Check for pinch to start drawing
+  let pinchingHand = null;
+
+  for (const hand of hands) {
+    if (isPinching(hand)) {
+      pinchingHand = hand;
+      break;
+    }
+  }
+
+  if (pinchingHand) {
+    drawing = true;
+    drawHand(pinchingHand);
+    statusText.textContent = "Drawing...";
+  } else {
+    drawing = false;
+    previousPoint = null;
+    statusText.textContent = "Activated - Waiting for pinch";
+  }
+}
+
+// Initialize MediaPipe Hands
+const hands = new Hands({
+  locateFile: (file) => {
+    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+  }
+});
+
+hands.setOptions({
+  maxNumHands: 2,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.7
+});
+
+hands.onResults(onResults);
+
+// Start camera
+document.getElementById("startBtn").onclick = async () => {
+
+  try {
+    statusText.textContent = "Starting camera...";
+
+    camera = new Camera(video, {
+      onFrame: async () => {
+        await hands.send({ image: video });
+      },
+      width: 640,
+      height: 480
+    });
+
+    await camera.start();
+
+    statusText.textContent = "Show both open hands to activate";
+
+  } catch (error) {
+    statusText.textContent =
+      "Camera error: Allow camera permission and try HTTPS.";
+    console.error(error);
+  }
+};
+
+</script>
+
+</body>
+</html>
